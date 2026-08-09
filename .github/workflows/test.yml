@@ -50,3 +50,52 @@ jobs:
             exit 1
           fi
       - run: mise r lint
+
+  # Build and test only. No render, no lint: `render` asserts a clean git diff, which line
+  # endings and the checked-in symlinks make unreliable here, and `lint` is a property of the
+  # source rather than of the platform — the Linux job already covers it.
+  #
+  # No shells are installed. GitHub's Windows image has Git Bash and PowerShell but no zsh or
+  # fish, and the completion tests skip a shell they cannot run rather than failing. mise makes
+  # the same call: its Windows jobs install no POSIX shells at all.
+  test-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      # Before checkout, or it is too late. git on Windows defaults to core.autocrlf=true, and
+      # the repo has no .gitattributes, so fixtures and expected outputs arrive with CRLF and
+      # every comparison against a checked-in string fails on an ending nobody can see.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: test-windows
+      - uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+      # EXPERIMENT: which shells the runner actually resolves, before anything is added.
+      - name: where do the shells come from
+        shell: cmd
+        run: |
+          where bash || echo "bash: not found"
+          where sh || echo "sh: not found"
+          where pwsh || echo "pwsh: not found"
+        continue-on-error: true
+      # `mount run=` starts fixtures with `sh`, and the Git bin directory that holds it is not
+      # on the runner's PATH by default — only Git's `cmd` directory is, which has git.exe and
+      # nothing else. Unlike `bash`, `sh` has no System32 impostor, so putting the directory on
+      # PATH is enough to resolve it.
+      - run: echo "C:\Program Files\Git\bin" >> $env:GITHUB_PATH
+        shell: pwsh
+      - run: mise r build
+      # Directly rather than through `mise r test`, so one failing binary does not hide the
+      # rest. EXPERIMENT: revert to `mise r test` before proposing this upstream.
+      - run: cargo test --all --all-features --no-fail-fast
+        env:
+          # The runner has System32's bash.exe — the WSL launcher, with no distribution
+          # installed — and the executable search order puts it ahead of Git Bash. Measured:
+          # without this, `usage bash` exits 1 with "Windows Subsystem for Linux has no
+          # installed distributions". Naming the shell is what #767 added the variable for.
+          USAGE_SHELL_BASH: C:\Program Files\Git\bin\bash.exe

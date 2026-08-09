@@ -83,13 +83,16 @@ fn run_with_timeout(shell: &str, secs: u32, script: &Path) -> std::io::Result<Ou
 /// the thing it guards must be the same executable, or an override would be honoured by one and
 /// not the other.
 ///
-/// Panics under `CI=1` (or any non-empty `CI`) to prevent silent false-positives in CI: if a
-/// shell is unusable in CI it's a configuration bug, not an excuse to skip the test.
+/// Panics under `CI=1` (or any non-empty `CI`) to prevent silent false-positives: if a shell is
+/// unusable on a runner that went to the trouble of installing it, that is a configuration bug,
+/// not an excuse to skip. The workflow installs zsh and fish for the Linux job only, so on
+/// Windows their absence is the expected state rather than a bug and the rule does not apply.
+/// mise draws the same line — its Windows runners install no POSIX shells at all.
 fn skip_if_shell_missing(shell: &str) -> bool {
     if shell_can_run_a_script(shell) {
         return false;
     }
-    if env::var("CI").is_ok_and(|v| !v.is_empty()) {
+    if cfg!(unix) && env::var("CI").is_ok_and(|v| !v.is_empty()) {
         panic!("shell `{shell}` cannot run a script but CI is set — refusing to skip");
     }
     eprintln!(
