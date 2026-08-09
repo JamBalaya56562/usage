@@ -50,3 +50,45 @@ jobs:
             exit 1
           fi
       - run: mise r lint
+
+  # Build and test only. `render` asserts a clean git diff, which line endings and the
+  # checked-in symlinks make unreliable here, and `lint` is a property of the source rather
+  # than of the platform — the Linux job already covers both.
+  #
+  # No shells are installed. The image has Git Bash and PowerShell but no zsh or fish, and the
+  # completion tests skip a shell they cannot run. mise makes the same call: its Windows jobs
+  # install no POSIX shells at all.
+  test-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      # Before checkout, or it is too late. git defaults to core.autocrlf=true on Windows and
+      # the repo has no .gitattributes, so fixtures and expected output would arrive with CRLF
+      # and comparisons against checked-in strings fail on an ending nobody can see — the diff
+      # prints the two sides as identical.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          shared-key: test-windows
+      - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+      - run: mise r build
+      # `cargo test` rather than `mise r test`, which is the same command, because a mise task
+      # cannot receive USAGE_SHELL_BASH. mise clears `usage_*` from a task's environment so
+      # that its own parsed arguments do not leak in, and on Windows that match is
+      # case-insensitive (`is_usage_env_key` in mise's src/task/mod.rs) — correct for a
+      # platform where `usage_foo` and `USAGE_FOO` are one variable, but it takes usage's
+      # settings namespace along with its parsed-argument one. Measured: under `mise run` the
+      # variable arrives empty, under `mise exec` and plain cargo it arrives intact.
+      - run: cargo test --all --all-features
+        env:
+          # The image carries System32's bash.exe — the WSL launcher, with no distribution
+          # installed — and CreateProcess searches the system directory before PATH, so a bare
+          # `bash` reaches it even though `where bash` lists Git Bash first. Measured: without
+          # this, `usage bash` exits 1 with "Windows Subsystem for Linux has no installed
+          # distributions". Naming the shell is what USAGE_SHELL_BASH exists for.
+          USAGE_SHELL_BASH: C:\Program Files\Git\bin\bash.exe

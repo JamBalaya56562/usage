@@ -34,18 +34,30 @@ fn skip_if_posix_shell_missing() -> bool {
         .arg("exit 0")
         .output()
         .is_ok_and(|out| out.status.success());
-    if sh_runs && mount_fixture_runs() {
+    // Which half failed, because the two mean different things: no `sh` at all is a machine
+    // without a POSIX shell, while `sh` running and the fixture not is usually `usage bash`
+    // reaching something that cannot open the path — the case `USAGE_SHELL_BASH` settles.
+    let reason = if !sh_runs {
+        "`sh` cannot run a script".to_string()
+    } else if let Some(detail) = mount_fixture_failure() {
+        format!("`sh` runs but a mount fixture does not — {detail}")
+    } else {
         return false;
-    }
+    };
     if env::var("CI").is_ok_and(|v| !v.is_empty()) {
-        panic!("no shell that can run the mount fixtures but CI is set — refusing to skip");
+        panic!("{reason}, and CI is set — refusing to skip");
     }
-    eprintln!("Skipping test - no shell that can run the mount fixtures");
+    eprintln!("Skipping test - {reason}");
     true
 }
 
-/// Whether a mount fixture actually runs, given as the absolute path `sh` would hand it.
-fn mount_fixture_runs() -> bool {
+/// `None` if a mount fixture runs, given as the absolute path `sh` would hand it; otherwise
+/// what went wrong.
+///
+/// The detail is carried rather than dropped because this guard panics under `CI`, and a bare
+/// "no usable shell" there leaves whoever reads the log with nothing to go on — the failure is
+/// in a child process whose output would otherwise be discarded.
+fn mount_fixture_failure() -> Option<String> {
     // Built from `CARGO_MANIFEST_DIR`, not `fs::canonicalize`. On Windows canonicalize returns
     // a `\\?\`-prefixed path, which usage cannot open — the probe would then fail on the shape
     // of the path rather than on the shell, and every mount test would skip on a machine where
@@ -55,12 +67,22 @@ fn mount_fixture_runs() -> bool {
         .unwrap()
         .join("examples")
         .join("mounted.sh");
-    Command::new(cargo::cargo_bin!("usage"))
+    let out = Command::new(cargo::cargo_bin!("usage"))
         .arg("bash")
-        .arg(fixture)
+        .arg(&fixture)
         .arg("--mount")
-        .output()
-        .is_ok_and(|out| out.status.success())
+        .output();
+    match out {
+        Ok(out) if out.status.success() => None,
+        Ok(out) => Some(format!(
+            "`usage bash {}` exited {:?}; stderr: {}; stdout: {}",
+            fixture.display(),
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim(),
+            String::from_utf8_lossy(&out.stdout).trim(),
+        )),
+        Err(err) => Some(format!("could not start the usage binary: {err}")),
+    }
 }
 
 #[test]
